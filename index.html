@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="kk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Жер сілкініс мониторы — демо</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #2d333b;
+    --text: #e6edf3; --muted: #8b949e;
+    --acc: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header h1 { font-size: 17px; font-weight: 600; }
+  header h1 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #00e676; margin-right: 8px; }
+  .controls { display: flex; gap: 10px; align-items: center; margin-left: auto; flex-wrap: wrap; }
+  select, button { background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--acc); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  #status { font-size: 13px; color: var(--muted); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #sidebar { width: 380px; min-width: 280px; background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; }
+  #map { flex: 1; }
+
+  .qrow { padding: 10px 14px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+  .qrow:hover { background: #1c2129; }
+  .qrow .top { display: flex; align-items: center; gap: 8px; }
+  .mag { font-weight: 700; padding: 1px 8px; border-radius: 4px; color: #0d1117; font-size: 12px; }
+  .qrow .meta { color: var(--muted); margin-top: 3px; }
+  .qrow .place { margin-top: 3px; }
+
+  footer { padding: 6px 18px; background: var(--panel); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+
+  .legend { position: absolute; bottom: 12px; left: 12px; z-index: 1000; background: rgba(13,17,23,.85); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+
+  .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); }
+  .leaflet-popup-tip { background: var(--panel); }
+  .pop a { color: var(--acc); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="dot" id="pulse"></span>Жер сілкініс мониторы <span style="color:var(--muted);font-weight:400">демо</span></h1>
+  <div class="controls">
+    <label for="city" style="font-size:13px;color:var(--muted)">Қала:</label>
+    <select id="city"></select>
+    <label for="radius" style="font-size:13px;color:var(--muted)">Радиус:</label>
+    <select id="radius">
+      <option value="50">50 км</option>
+      <option value="100">100 км</option>
+      <option value="300">300 км</option>
+      <option value="500" selected>500 км</option>
+      <option value="1000">1 000 км</option>
+      <option value="2000">2 000 км</option>
+      <option value="5000">5 000 км</option>
+      <option value="100000">Әлем</option>
+    </select>
+    <button id="refresh">↻ Жаңарту</button>
+    <span id="status">Жүктелуде…</span><span id="countdown" style="font-size:13px;color:var(--muted)"></span>
+  </div>
+</header>
+
+<main>
+  <div id="sidebar"></div>
+  <div id="map"></div>
+</main>
+
+<footer>Автор: <b>Қыстаубаева Айгул Тулкибаевна</b> — география пәні мұғалімі • Дереккөз: <b>USGS</b> (ашық деректер) • Бұл <b>алдын ала ескерту емес</b> — оқиға болғаннан кейін 1–10 минуттан кейін көрсетілетін мониторинг • Жаңарту: 1 минут сайын автоматты (таймер жоғарыда)</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const FEED = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson";
+const CITIES = {
+  "Қарғалы (Фабричный)": [43.1667, 76.4167],
+  "Алматы":          [43.238, 76.955],
+  "Астана":          [51.166, 71.475],
+  "Шымкент":         [42.316, 69.600],
+  "Қарағанды":       [49.807, 73.103],
+  "Тараз":           [42.899, 71.577],
+  "Семей":           [50.334, 80.260],
+  "Қостанай":        [53.191, 63.606],
+  "Павлодар":        [52.294, 77.011],
+  "Ақтөбе":          [48.020, 58.344],
+  "Атырау":          [47.101, 51.923],
+  "Ақтау":           [43.651, 51.207],
+  "Оңтүстік Қорғанд": [42.900, 71.550]
+};
+
+let quakes = [], markers = [], cityMarker = null, cityCircle = null;
+let RADIUS = 500; // таңдалған радиус, км
+
+const map = L.map("map").setView([45.0, 75.0], 4);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+}).addTo(map);
+
+const legend = document.createElement("div");
+legend.className = "legend";
+legend.innerHTML = `
+  <div><span class="sw" style="background:#00e676"></span>M &lt; 4</div>
+  <div><span class="sw" style="background:#ff9100"></span>M 4–4.9</div>
+  <div><span class="sw" style="background:#ff1744"></span>M 5–5.9</div>
+  <div><span class="sw" style="background:#e040fb"></span>M ≥ 6</div>
+  <div style="margin-top:4px"><span class="sw" style="background:#58a6ff"></span>Таңдалған қала (радиус шеңбері)</div>`;
+map.getContainer().appendChild(legend);
+
+function magColor(m) {
+  if (m >= 6) return "#e040fb";
+  if (m >= 5) return "#ff1744";
+  if (m >= 4) return "#ff9100";
+  return "#00e676";
+}
+
+function haversine(a1, o1, a2, o2) {
+  const r = 6371, p1 = a1*Math.PI/180, p2 = a2*Math.PI/180;
+  const dphi = (a2-a1)*Math.PI/180, dlmb = (o2-o1)*Math.PI/180;
+  const x = Math.sin(dphi/2)**2 + Math.cos(p1)*Math.cos(p2)*Math.sin(dlmb/2)**2;
+  return 2 * r * Math.asin(Math.sqrt(x));
+}
+
+function selCity() { return document.getElementById("city").value; }
+function cityCoord() { return CITIES[selCity()]; }
+
+async function load() {
+  const btn = document.getElementById("refresh");
+  btn.disabled = true;
+  document.getElementById("status").textContent = "Жүктелуде…";
+  try {
+    const data = await (await fetch(FEED)).json();
+    quakes = data.features
+      .map(f => {
+        const p = f.properties, c = f.geometry.coordinates;
+        return { id: f.id, mag: p.mag || 0, place: p.place || "?", time: p.time, depth: c[2] || 0, url: p.url, lat: c[1], lon: c[0] };
+      })
+      .filter(q => q.mag != null)
+      .sort((a, b) => b.time - a.time);
+    render();
+    document.getElementById("status").textContent =
+      "Соңғы жаңарту: " + new Date().toLocaleTimeString() + " | " + quakes.length + " оқиға (24 сағат)";
+    if (typeof nextAt !== "undefined") nextAt = Date.now() + REFRESH_MS;
+  } catch (e) {
+    document.getElementById("status").textContent = "Қате: " + e.message;
+  }
+  btn.disabled = false;
+}
+
+function render() {
+  const [clat, clon] = cityCoord();
+
+  // --- карта белгілері ---
+  markers.forEach(m => map.removeLayer(m));
+  markers = [];
+  for (const q of quakes) {
+    const dist = haversine(clat, clon, q.lat, q.lon);
+    q.dist = dist;
+    const mk = L.circleMarker([q.lat, q.lon], {
+      radius: Math.max(4, q.mag * 3),
+      color: magColor(q.mag), weight: 1.5,
+      fillColor: magColor(q.mag), fillOpacity: 0.6
+    });
+    const near = dist < RADIUS ? ` <b style="color:#58a6ff">(${dist.toFixed(0)} км)</b>` : "";
+    mk.bindPopup(`<div class="pop"><b>M ${q.mag.toFixed(1)}</b> — ${q.place}${near}<br>
+      ${new Date(q.time).toLocaleString()} • тереңдік: ~${q.dist !== undefined ? Math.round(q.depth) : "?"} км<br>
+      ${q.url ? `<a href="${q.url}" target="_blank">USGS беті ↗</a>` : ""}</div>`);
+    mk.addTo(map);
+    markers.push(mk);
+  }
+
+  if (cityMarker) map.removeLayer(cityMarker);
+  cityMarker = L.circleMarker([clat, clon], {
+    radius: 7, color: "#58a6ff", weight: 2, fillColor: "#58a6ff", fillOpacity: 1
+  }).bindPopup(`<b>${selCity()}</b>`).addTo(map);
+  if (cityCircle) map.removeLayer(cityCircle);
+  cityCircle = L.circle([clat, clon], { radius: RADIUS * 1000, color: "#58a6ff", weight: 1, dashArray: "6 6", fill: false }).addTo(map);
+
+  // --- тізім (алдымен жақындары, сосын уақыт бойынша) ---
+  const sorted = [...quakes].sort((a, b) => {
+    const aNear = a.dist <= RADIUS ? 0 : 1, bNear = b.dist <= RADIUS ? 0 : 1;
+    return aNear - bNear || b.time - a.time;
+  });
+  const sb = document.getElementById("sidebar");
+  sb.innerHTML = "";
+  for (const q of sorted.slice(0, 60)) {
+    const row = document.createElement("div");
+    row.className = "qrow";
+    const badge = q.dist <= RADIUS ? magColor(q.mag) : "#30363d";
+    row.innerHTML = `
+      <div class="top">
+        <span class="mag" style="background:${badge}">M ${q.mag.toFixed(1)}</span>
+        <span style="color:var(--muted)">${(q.dist/1).toFixed(0)} км</span>
+        <span style="margin-left:auto;color:var(--muted)">${new Date(q.time).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</span>
+      </div>
+      <div class="place">${q.place}</div>
+      <div class="meta">${new Date(q.time).toLocaleDateString()} • ${Math.round(q.depth)} км тереңдікте</div>`;
+    row.onclick = () => { map.setView([q.lat, q.lon], 6); markers.find(m => m.getLatLng().eq(L.latLng(q.lat, q.lon)))?.openPopup(); };
+    sb.appendChild(row);
+  }
+  if (quakes.length === 0) sb.innerHTML = `<div style="padding:20px;color:var(--muted)">Оқиғалар жоқ.</div>`;
+}
+
+// қалалар тізімін толтыру
+const sel = document.getElementById("city");
+for (const [name, c] of Object.entries(CITIES)) {
+  const o = document.createElement("option");
+  o.value = name; o.textContent = name;
+  sel.appendChild(o);
+}
+sel.value = "Қарғалы (Фабричный)";
+sel.onchange = render;
+document.getElementById("refresh").onclick = load;
+
+// радиусты таңдау
+const rsel = document.getElementById("radius");
+rsel.onchange = () => { RADIUS = parseInt(rsel.value, 10); render(); };
+
+// --- автоматты жаңарту: 1 минут сайын + кері санақ таймері ---
+const REFRESH_MS = 60 * 1000;
+let nextAt = Date.now() + REFRESH_MS;
+setInterval(() => {
+  const s = Math.ceil((nextAt - Date.now()) / 1000);
+  const cd = document.getElementById("countdown");
+  if (s <= 0) {
+    nextAt = Date.now() + REFRESH_MS;
+    load();
+  } else if (cd) {
+    cd.textContent = " | келесі жаңарту: " + s + " с";
+  }
+}, 1000);
+
+load();
+</script>
+</body>
+</html>
